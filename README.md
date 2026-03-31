@@ -36,7 +36,7 @@ pnpm preview
 
 ## Deploy
 
-Deployed to GitHub Pages via GitHub Actions. On every push to `main`, the workflow at `.github/workflows/deploy.yml` builds and deploys to:
+Deployed to GitHub Pages via GitHub Actions. On every push to `master`, the workflow at `.github/workflows/static.yml` builds and deploys to:
 
 **https://robertkibet.github.io/clipbodo/**
 
