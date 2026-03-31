@@ -1,21 +1,47 @@
-# React + TypeScript + Vite + shadcn/ui
+# Clipbodo
 
-This is a template for a new Vite project with React, TypeScript, and shadcn/ui.
+A minimalist clipboard inspector. Paste, drop, or read clipboard contents to inspect all MIME types, items, and files.
 
-## Adding components
+## Features
 
-To add components to your app, run the following command:
+- **Paste** (`⌘V` / `Ctrl+V`) — captures all clipboard types via the DataTransfer API, including custom MIME types
+- **Drag & Drop** — drop files or content onto the page to inspect
+- **Read Clipboard** button — uses the async Clipboard API (limited to standard types)
+- **Copy as text** — copy any text entry back as plain text
+- **Dark / Light theme** — toggle with the theme button, respects system preference
+- **WCAG AA contrast** — all text passes accessibility contrast requirements
+
+## Tech Stack
+
+- React 19
+- TypeScript
+- Tailwind CSS v4
+- shadcn/ui (Radix Lyra style)
+- Remix Icons
+- Vite
+
+## Getting Started
 
 ```bash
-npx shadcn@latest add button
+pnpm install
+pnpm dev
 ```
 
-This will place the ui components in the `src/components` directory.
+## Build
 
-## Using components
-
-To use the components in your app, import them as follows:
-
-```tsx
-import { Button } from "@/components/ui/button"
+```bash
+pnpm build
+pnpm preview
 ```
+
+## Deploy
+
+Deployed to GitHub Pages via GitHub Actions. On every push to `main`, the workflow at `.github/workflows/deploy.yml` builds and deploys to:
+
+**https://robertkibet.github.io/clipbodo/**
+
+To enable: go to your repo Settings → Pages → Source → **GitHub Actions**.
+
+## License
+
+MIT

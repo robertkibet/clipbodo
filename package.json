@@ -1,7 +1,22 @@
 {
   "name": "clipbodo",
-  "private": true,
-  "version": "0.0.1",
+  "private": false,
+  "version": "0.1.0",
+  "description": "A minimalist clipboard inspector. Paste, drop, or read clipboard contents to inspect all MIME types, items, and files.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robertkibet/clipbodo"
+  },
+  "author": "robertkibet",
+  "homepage": "https://robertkibet.github.io/clipbodo/",
+  "keywords": [
+    "clipboard",
+    "inspector",
+    "paste",
+    "datatransfer",
+    "mime"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",

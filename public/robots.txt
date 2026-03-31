@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://robertkibet.github.io/clipbodo/sitemap.xml
