@@ -40,8 +40,6 @@ Deployed to GitHub Pages via GitHub Actions. On every push to `main`, the workfl
 
 **https://robertkibet.github.io/clipbodo/**
 
-To enable: go to your repo Settings → Pages → Source → **GitHub Actions**.
-
 ## License
 
 MIT
