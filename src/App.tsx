@@ -12,6 +12,7 @@ export function App() {
           href="https://github.com/robertkibet/clipbodo"
           target="_blank"
           rel="noreferrer"
+          aria-label="Clipbodo on GitHub (opens in new tab)"
           className="inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground"
         >
           <RiGithubFill className="size-4" />
