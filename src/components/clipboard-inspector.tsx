@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useId,
+} from "react"
 import {
   RiClipboardLine,
   RiFileCopyLine,
@@ -7,10 +13,13 @@ import {
   RiDragDropLine,
   RiSunLine,
   RiMoonLine,
+  RiLoader2Line,
 } from "@remixicon/react"
 import { Button } from "@/components/ui/button"
 import { useTheme } from "@/components/theme-provider"
 import { Logo } from "@/components/logo"
+
+// ─── Types ───────────────────────────────────────────────────────────
 
 interface FileInfo {
   name: string
@@ -20,24 +29,43 @@ interface FileInfo {
 }
 
 interface TypeEntry {
+  id: string
   type: string
   data: string | FileInfo | null
 }
 
 interface ItemEntry {
+  id: string
   kind: string
   type: string
   value: string | FileInfo | null
 }
 
+interface FileEntry {
+  id: string
+  info: FileInfo
+}
+
 interface ClipboardData {
+  id: string
   source: string
   types: TypeEntry[]
   items: ItemEntry[] | null
-  files: FileInfo[] | null
+  files: FileEntry[] | null
 }
 
-function fileInfo(file: File | Blob | null): FileInfo | null {
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const editableParent = target.closest(
+    "input, textarea, select, [contenteditable='true']"
+  )
+  return editableParent !== null
+}
+
+function fileInfo(file: File | Blob): FileInfo | null {
   if (!file) return null
   return {
     name: file instanceof File ? file.name : "blob",
@@ -47,11 +75,41 @@ function fileInfo(file: File | Blob | null): FileInfo | null {
   }
 }
 
+function revokeEntries(entries: ClipboardData[]) {
+  for (const entry of entries) {
+    for (const t of entry.types) {
+      if (t.data && typeof t.data !== "string") {
+        URL.revokeObjectURL(t.data.url)
+      }
+    }
+    if (entry.items) {
+      for (const item of entry.items) {
+        if (item.value && typeof item.value !== "string") {
+          URL.revokeObjectURL(item.value.url)
+        }
+      }
+    }
+    if (entry.files) {
+      for (const f of entry.files) {
+        URL.revokeObjectURL(f.info.url)
+      }
+    }
+  }
+}
+
+let nextId = 0
+function genId() {
+  return `cb-${++nextId}`
+}
+
+// ─── Extraction ──────────────────────────────────────────────────────
+
 async function extractFromDataTransfer(
   dt: DataTransfer,
   source: string
 ): Promise<ClipboardData> {
   const types: TypeEntry[] = Array.from(dt.types).map((type) => ({
+    id: genId(),
     type,
     data: dt.getData(type),
   }))
@@ -59,6 +117,7 @@ async function extractFromDataTransfer(
   const items: ItemEntry[] | null = dt.items
     ? await Promise.all(
         Array.from(dt.items).map(async (item) => ({
+          id: genId(),
           kind: item.kind,
           type: item.type,
           value:
@@ -69,11 +128,16 @@ async function extractFromDataTransfer(
       )
     : null
 
-  const files: FileInfo[] | null = dt.files
-    ? Array.from(dt.files).map((f) => fileInfo(f)!)
+  const files: FileEntry[] | null = dt.files
+    ? Array.from(dt.files)
+        .map((f) => {
+          const info = fileInfo(f)
+          return info ? { id: genId(), info } : null
+        })
+        .filter((f): f is FileEntry => f !== null)
     : null
 
-  return { source, types, items, files }
+  return { id: genId(), source, types, items, files }
 }
 
 async function extractFromClipboardItems(
@@ -89,6 +153,7 @@ async function extractFromClipboardItems(
             const isText =
               blob.type.startsWith("text/") || blob.type === "image/svg+xml"
             return {
+              id: genId(),
               type,
               data: isText ? await blob.text() : fileInfo(blob),
             }
@@ -99,60 +164,93 @@ async function extractFromClipboardItems(
       )
     ).filter((t): t is TypeEntry => t !== null)
     if (types.length > 0) {
-      results.push({ source: "ClipboardItem", types, items: null, files: null })
+      results.push({
+        id: genId(),
+        source: "ClipboardItem",
+        types,
+        items: null,
+        files: null,
+      })
     }
   }
   return results
 }
+
+// ─── Component ───────────────────────────────────────────────────────
 
 export function ClipboardInspector() {
   const [data, setData] = useState<ClipboardData[]>([])
   const [error, setError] = useState<string | null>(null)
   const [copiedType, setCopiedType] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [isReading, setIsReading] = useState(false)
 
-  const isMac = useMemo(
-    () => /mac|iphone|ipad|ipod/i.test(navigator.userAgent),
-    []
-  )
+  const dragCounter = useRef(0)
+  const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dataRef = useRef<ClipboardData[]>([])
+  const errorId = useId()
+
+  const isMac = /mac|iphone|ipad|ipod/i.test(navigator.userAgent)
   const modKey = isMac ? "⌘" : "Ctrl"
   const { theme, setTheme } = useTheme()
 
+  // Keep ref in sync so unmount / clear can revoke old URLs
+  dataRef.current = data
+
   const toggleTheme = useCallback(() => {
-    setTheme(theme === "dark" ? "light" : theme === "light" ? "dark" : "light")
+    setTheme(theme === "dark" ? "light" : "dark")
   }, [theme, setTheme])
 
   const clear = useCallback(() => {
+    revokeEntries(dataRef.current)
     setData([])
     setError(null)
   }, [])
 
-  const readClipboardApi = useCallback(async () => {
+  const copyAsText = useCallback(async (text: string, type: string) => {
     try {
-      setError(null)
+      await navigator.clipboard.writeText(text)
+      setCopiedType(type)
+      if (copiedTimeoutRef.current) {
+        clearTimeout(copiedTimeoutRef.current)
+      }
+      copiedTimeoutRef.current = setTimeout(() => {
+        setCopiedType(null)
+        copiedTimeoutRef.current = null
+      }, 1500)
+    } catch {
+      setError("Failed to copy to clipboard")
+    }
+  }, [])
+
+  const readClipboardApi = useCallback(async () => {
+    if (isReading) return
+    setIsReading(true)
+    setError(null)
+    try {
       const items = await navigator.clipboard.read()
       const results = await extractFromClipboardItems(items)
       if (results.length === 0 || results.every((r) => r.types.length === 0)) {
         setError(
           `No readable types found. The Clipboard API only supports standard types (text/plain, text/html, image/png). Try pasting with ${isMac ? "⌘" : "Ctrl+"}V instead.`
         )
+        setIsReading(false)
         return
       }
+      revokeEntries(dataRef.current)
       setData(results)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to read clipboard")
+    } finally {
+      setIsReading(false)
     }
-  }, [])
+  }, [isReading, isMac])
 
-  const copyAsText = useCallback(async (text: string, type: string) => {
-    await navigator.clipboard.writeText(text)
-    setCopiedType(type)
-    setTimeout(() => setCopiedType(null), 1500)
-  }, [])
-
-  // Paste event handler — captures ALL types via DataTransfer
+  // Paste / Drag-Drop listeners
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
+      // Don't intercept paste inside editable fields
+      if (isEditableTarget(e.target)) return
       e.preventDefault()
       if (!e.clipboardData) return
       setError(null)
@@ -160,18 +258,34 @@ export function ClipboardInspector() {
         e.clipboardData,
         "clipboardData"
       )
+      revokeEntries(dataRef.current)
       setData([result])
+    }
+
+    const onDragEnter = (e: DragEvent) => {
+      e.preventDefault()
+      dragCounter.current += 1
+      if (dragCounter.current === 1) {
+        setDragging(true)
+      }
     }
 
     const onDragOver = (e: DragEvent) => {
       e.preventDefault()
-      setDragging(true)
     }
 
-    const onDragLeave = () => setDragging(false)
+    const onDragLeave = (e: DragEvent) => {
+      e.preventDefault()
+      dragCounter.current -= 1
+      if (dragCounter.current <= 0) {
+        dragCounter.current = 0
+        setDragging(false)
+      }
+    }
 
     const onDrop = async (e: DragEvent) => {
       e.preventDefault()
+      dragCounter.current = 0
       setDragging(false)
       if (!e.dataTransfer) return
       setError(null)
@@ -179,18 +293,27 @@ export function ClipboardInspector() {
         e.dataTransfer,
         "dataTransfer"
       )
+      revokeEntries(dataRef.current)
       setData([result])
     }
 
     document.addEventListener("paste", onPaste)
+    document.addEventListener("dragenter", onDragEnter)
     document.addEventListener("dragover", onDragOver)
     document.addEventListener("dragleave", onDragLeave)
     document.addEventListener("drop", onDrop)
+
     return () => {
       document.removeEventListener("paste", onPaste)
+      document.removeEventListener("dragenter", onDragEnter)
       document.removeEventListener("dragover", onDragOver)
       document.removeEventListener("dragleave", onDragLeave)
       document.removeEventListener("drop", onDrop)
+
+      if (copiedTimeoutRef.current) {
+        clearTimeout(copiedTimeoutRef.current)
+      }
+      revokeEntries(dataRef.current)
     }
   }, [])
 
@@ -210,7 +333,16 @@ export function ClipboardInspector() {
           </div>
         </div>
         <div className="flex gap-1.5">
-          <Button variant="ghost" size="icon-sm" onClick={toggleTheme}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={toggleTheme}
+            aria-label={
+              theme === "dark"
+                ? "Switch to light theme"
+                : "Switch to dark theme"
+            }
+          >
             {theme === "dark" ? <RiSunLine /> : <RiMoonLine />}
           </Button>
           {hasData && (
@@ -219,18 +351,44 @@ export function ClipboardInspector() {
               Clear
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={readClipboardApi}>
-            <RiClipboardLine data-icon="inline-start" />
-            Read Clipboard
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={readClipboardApi}
+            disabled={isReading}
+            aria-busy={isReading}
+          >
+            {isReading ? (
+              <RiLoader2Line
+                data-icon="inline-start"
+                className="animate-spin"
+              />
+            ) : (
+              <RiClipboardLine data-icon="inline-start" />
+            )}
+            {isReading ? "Reading…" : "Read Clipboard"}
           </Button>
         </div>
       </div>
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {/* Error — aria-live so screen readers announce it */}
+      <div aria-live="polite" aria-atomic="true" role="status">
+        {error && (
+          <p
+            id={errorId}
+            className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            {error}
+          </p>
+        )}
+      </div>
 
       {/* Empty state */}
       {!hasData && (
         <div
+          role="region"
+          aria-label="Clipboard drop zone"
+          aria-dropeffect="copy"
           className={`flex flex-col items-center gap-3 border border-dashed py-16 text-center transition-colors ${dragging ? "border-primary bg-primary/5" : "border-border"}`}
         >
           <RiDragDropLine className="size-6 text-muted-foreground" />
@@ -258,8 +416,8 @@ export function ClipboardInspector() {
       )}
 
       {/* Results */}
-      {data.map((entry, idx) => (
-        <div key={idx} className="flex flex-col gap-3">
+      {data.map((entry) => (
+        <div key={entry.id} className="flex flex-col gap-3">
           <p className="font-mono text-[10px] text-muted-foreground">
             source: event.{entry.source}
           </p>
@@ -275,7 +433,7 @@ export function ClipboardInspector() {
               </div>
 
               {entry.types.map((t) => (
-                <div key={t.type} className="flex flex-col gap-1.5">
+                <div key={t.id} className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between">
                     <span className="bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                       {t.type}
@@ -285,6 +443,7 @@ export function ClipboardInspector() {
                         variant="ghost"
                         size="xs"
                         onClick={() => copyAsText(t.data as string, t.type)}
+                        aria-label={`Copy ${t.type} as text`}
                       >
                         {copiedType === t.type ? (
                           <RiCheckLine data-icon="inline-start" />
@@ -297,7 +456,12 @@ export function ClipboardInspector() {
                   </div>
                   {typeof t.data === "string" ? (
                     t.data ? (
-                      <pre className="max-h-64 min-w-0 overflow-auto border border-border bg-muted/50 p-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground">
+                      <pre
+                        className="max-h-64 min-w-0 overflow-auto border border-border bg-muted/50 p-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground"
+                        tabIndex={0}
+                        role="region"
+                        aria-label={`Content for ${t.type}`}
+                      >
                         {t.data}
                       </pre>
                     ) : (
@@ -308,11 +472,17 @@ export function ClipboardInspector() {
                   ) : t.data ? (
                     <div className="border border-border p-3">
                       {t.data.type.startsWith("image/") ? (
-                        <a href={t.data.url} target="_blank" rel="noreferrer">
+                        <a
+                          href={t.data.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`Open ${t.data.name} in new tab`}
+                        >
                           <img
                             src={t.data.url}
-                            alt={t.data.name}
+                            alt={`Clipboard image: ${t.data.name}`}
                             className="max-h-64 object-contain"
+                            loading="lazy"
                           />
                         </a>
                       ) : (
@@ -337,9 +507,9 @@ export function ClipboardInspector() {
                 </span>
               </div>
 
-              {entry.items.map((item, i) => (
+              {entry.items.map((item) => (
                 <div
-                  key={i}
+                  key={item.id}
                   className="flex flex-col gap-1.5 border border-border p-3"
                 >
                   <div className="flex gap-3 font-mono text-[10px] text-muted-foreground">
@@ -348,7 +518,12 @@ export function ClipboardInspector() {
                   </div>
                   {typeof item.value === "string" ? (
                     item.value ? (
-                      <pre className="max-h-48 min-w-0 overflow-auto bg-muted/50 p-2 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground">
+                      <pre
+                        className="max-h-48 min-w-0 overflow-auto bg-muted/50 p-2 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground"
+                        tabIndex={0}
+                        role="region"
+                        aria-label={`Item content for ${item.type}`}
+                      >
                         {item.value}
                       </pre>
                     ) : (
@@ -358,11 +533,17 @@ export function ClipboardInspector() {
                     )
                   ) : item.value ? (
                     item.value.type.startsWith("image/") ? (
-                      <a href={item.value.url} target="_blank" rel="noreferrer">
+                      <a
+                        href={item.value.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open ${item.value.name} in new tab`}
+                      >
                         <img
                           src={item.value.url}
-                          alt={item.value.name}
+                          alt={`Clipboard image: ${item.value.name}`}
                           className="max-h-48 object-contain"
+                          loading="lazy"
                         />
                       </a>
                     ) : (
@@ -386,24 +567,30 @@ export function ClipboardInspector() {
                 </span>
               </div>
 
-              {entry.files.map((file, i) => (
+              {entry.files.map((file) => (
                 <div
-                  key={i}
+                  key={file.id}
                   className="flex items-center gap-3 border border-border p-3"
                 >
-                  {file.type.startsWith("image/") ? (
-                    <a href={file.url} target="_blank" rel="noreferrer">
+                  {file.info.type.startsWith("image/") ? (
+                    <a
+                      href={file.info.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Open ${file.info.name} in new tab`}
+                    >
                       <img
-                        src={file.url}
-                        alt={file.name}
+                        src={file.info.url}
+                        alt={`Dropped image: ${file.info.name}`}
                         className="max-h-32 object-contain"
+                        loading="lazy"
                       />
                     </a>
                   ) : null}
                   <div className="font-mono text-xs text-muted-foreground">
-                    <p>{file.name}</p>
+                    <p>{file.info.name}</p>
                     <p>
-                      {file.size} bytes — {file.type}
+                      {file.info.size} bytes — {file.info.type}
                     </p>
                   </div>
                 </div>
