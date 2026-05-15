@@ -4,7 +4,7 @@ import { ClipboardInspector } from "@/components/clipboard-inspector"
 export function App() {
   return (
     <div className="flex h-svh flex-col overflow-hidden">
-      <main className="min-h-0 flex-1 overflow-y-auto p-6">
+      <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
         <ClipboardInspector />
       </main>
       <footer className="flex shrink-0 items-center justify-center gap-1.5 border-t border-border px-6 py-3 text-[10px] text-muted-foreground">

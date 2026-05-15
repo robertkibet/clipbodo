@@ -9,6 +9,9 @@
     "url": "https://github.com/robertkibet/clipbodo"
   },
   "author": "robertkibet",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "homepage": "https://robertkibet.github.io/clipbodo/",
   "keywords": [
     "clipboard",
